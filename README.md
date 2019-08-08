@@ -17,9 +17,9 @@ optional arguments:
 -c, --check 		 Check if user exist on the remote servers.
 -d, --disable 		 Delete user.
 -e, --enable 		 Create user.
--h, --help		     Show this help message and exit.
+-h, --help           Show this help message and exit.
 -l, --log <file>	 Log file.
--p, --ping		     Ping remote server if you cannot ssh into it.
+-p, --ping           Ping remote server if you cannot ssh into it.
 -r, --remote-user	 Check if remote user can login to remote servers.
 -x, --exmaple		 Show example of User credential and Server file.
 -v, --verbose		 Verbosity.
