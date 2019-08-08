@@ -1,4 +1,4 @@
-# create-remote-user 
+# create-remote-user
 Checks if user from file exist in a list of servers.
 Can creates/delete user on servers from a file. The script has some error
 handling, it checks if it can ssh into the host, if it can ping it and
@@ -14,18 +14,18 @@ required arguments:
 -s, --server <file>	 List of server, see file example below.
 
 optional arguments:
--c, --check 		 Check if user exist on the remote servers.
--d, --disable 		 Delete user.
--e, --enable 		 Create user.
+-c, --check          Check if user exist on the remote servers.
+-d, --disable        Delete user.
+-e, --enable         Create user.
 -h, --help           Show this help message and exit.
--l, --log <file>	 Log file.
+-l, --log <file>     Log file.
 -p, --ping           Ping remote server if you cannot ssh into it.
--r, --remote-user	 Check if remote user can login to remote servers.
--x, --exmaple		 Show example of User credential and Server file.
--v, --verbose		 Verbosity.
-             		 -v info
-             		 -vv debug
-             		 -vvv bash debug
+-r, --remote-user    Check if remote user can login to remote servers.
+-x, --exmaple        Show example of User credential and Server file.
+-v, --verbose        Verbosity.
+                     -v info
+                     -vv debug
+                     -vvv bash debug
 ```
 
 ## Example User File
