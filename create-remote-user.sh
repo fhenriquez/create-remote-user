@@ -20,7 +20,7 @@
 # Notes:
 # This script uses assossiated arrays which were introduce in bash v4.
 #
-__version__="2.1.0"
+__version__="2.2.0"
 __author__="Franklin Henriquez"
 __email__="franklin.a.henriquez@gmail.com"
 
@@ -115,13 +115,16 @@ usage() {
     \r-s, --server <file>\t List of server, see file example below.
 
     \roptional arguments:
+    \r-a, --auth-keys <file>\t Add public ssh key to authorized_keys file.
     \r-c, --check \t\t Check if user exist on the remote servers.
     \r-d, --disable \t\t Delete user.
     \r-e, --enable \t\t Create user.
     \r-h, --help\t\t Show this help message and exit.
+    \r-k, --key\t\t Create user with password.
     \r-l, --log <file>\t Log file.
     \r-p, --ping\t\t Ping remote server if you cannot ssh into it.
     \r-r, --remote-user\t Check if remote user can login to remote servers.
+    \r-w, --password\t\t Server file contian's password instead of key.
     \r-x, --exmaple\t\t Show example of User credential and Server file.
     \r-v, --verbose\t\t Verbosity.
     \r             \t\t -v info
@@ -165,8 +168,8 @@ example_file () {
 # ARGS: main args
 function parse_args() {
 
-    local short_opts='c,d,e,h,l:,p,r,s:,u:,v,x'
-    local long_opts='check,enable,example,disable,help,log:,ping,remote-user,server:,user:,verbose'
+    local short_opts='a:,c,d,e,h,k,l:,p,r,s:,u:,v,w,x'
+    local long_opts='auth-keys:,check,enable,example,disable,help,key,log:,password,ping,remote-user,server:,user:,verbose'
 
     # -use ! and PIPESTATUS to get exit code with errexit set
     # -temporarily store output to be able to check for errors
@@ -193,6 +196,11 @@ function parse_args() {
     while true ; do
         case "$1" in
 
+            -a | --auth-keys)
+                add_ssh_pub="true"
+                ssh_pub_key_file="$2"
+                shift 2
+                ;;
             -c | --check )
                 CHECK_USER="true"
                 shift
@@ -211,6 +219,12 @@ function parse_args() {
                 # Display usage.
                 usage
                 exit 1;
+                ;;
+            -k | --key)
+                ADD_USER="true"
+                CHECK_USER="true"
+                ADD_USER_WITH_PASSWD="true"
+                shift
                 ;;
             -l | --log)
                 LOG_FILE="$2"
@@ -241,6 +255,10 @@ function parse_args() {
             -u | --user)
                 user_file="$2"
                 shift 2
+                ;;
+            -w | --password)
+                server_file_password="true"
+                shift
                 ;;
             -x | --example)
                 # Display exmaple.
@@ -376,7 +394,12 @@ function check_user() {
     eval "declare -A local server_array="${1#*=}
     for key in "${!server_array[@]}"
     do
-        debug "key: ${key}  value: ${server_array[${key}]}"
+        if [[ "${server_file_password}" == "true" && "${key}" == "ssh_id_file" ]]
+        then
+            debug "Using password: "${IYellow}REDACTED${Color_Off}""
+        else
+            debug "key: ${key}  value: ${server_array[${key}]}"
+        fi
     done
 
     local remote_server=${server_array[remote_server]}
@@ -384,10 +407,16 @@ function check_user() {
     local remote_username=${server_array[remote_username]}
     debug "Remote user ${remote_username}"
     local ssh_id_file=${server_array[ssh_id_file]}
-    debug "ssh key ${ssh_id_file}"
+    if [ "${server_file_password}" != "true" ]
+    then
+        debug "ssh key ${ssh_id_file}"
+    fi
 
     # Check if SSH key is available.
-    if [[ "${server_array[ssh_test]}" == *"No such file or directory"* ]]
+    if [ "${server_file_password}" == "true" ]
+    then
+        debug "Logging with password instead of ssh key"
+    elif [[ "${server_array[ssh_test]}" == *"No such file or directory"* ]]
     then
             error "${ssh_id_file} not found"
             local resp=$(echo -e "${server_array[ssh_test]}" | head -1)
@@ -428,12 +457,25 @@ function check_user() {
     local ssh_cmd_response
 
     #ssh_cmd_response=$(ssh ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} "${ssh_cmd}"; echo $?)
-    debug "cat ${TEMP_FILE} | ssh -vvv -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server}"
-    ssh_cmd_response=$(cat ${TEMP_FILE} | ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} 'bash -s')
+    if [ "${server_file_password}" == "true" ]
+    then
+        debug "cat ${TEMP_FILE} | sshpass -p "${IYellow}REDACTED${Color_Off}" ssh -t -o ConnectTimeout=10 -o StrictHostKeyChecking=no ${remote_username}@${remote_server}"
+        ssh_cmd_response=$(cat ${TEMP_FILE} | sshpass -p "${ssh_id_file}" ssh -t -o ConnectTimeout=10 -o StrictHostKeyChecking=no ${remote_username}@${remote_server} 'bash -s' 2> /dev/null)
+    else
+        debug "cat ${TEMP_FILE} | ssh -vvv -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server}"
+        ssh_cmd_response=$(cat ${TEMP_FILE} | ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} 'bash -s' 2> /dev/null)
+    fi
 
     local ssh_cmd_exit="$?"
     debug "ssh exit code: ${ssh_cmd_exit}"
     debug "ssh response\n ${ssh_cmd_response}"
+
+
+    # Redacting password.
+    if [ "${server_file_password}" == "true" ]
+    then
+        ssh_id_file="REDACTED"
+    fi
 
     # If ssh_cmd_exit is 0 are you able to ssh, if it returns greater than 1 there is a problem
     if [[ "${ssh_cmd_exit}" -ne 0 ]]
@@ -460,7 +502,10 @@ function check_user() {
         fi
     elif [[ "${ssh_cmd_response}" == *"not exist"* ]]
     then
-        warn "${ssh_cmd_response}"
+        # Parsing the extra stderr lines.
+        fix_output=$(echo ${ssh_cmd_response//sudo*/} | head -n 1)
+        warn "${fix_output}"
+        #warn "${ssh_cmd_response}"
         echo "${remote_server}: user does not exist"
         return 0
     else
@@ -490,7 +535,7 @@ function check_user() {
 
                 # This to bypass a TTY bug, it will send a easier command to get sudoer line.
                 debug "Re-checking sudoers"
-                ssh_sudo_cmd_resp=$(ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} "${ssh_cmd3}")
+                ssh_sudo_cmd_resp=$(ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} "${ssh_cmd3}" 2> /dev/null)
                 debug "${ssh_cmd3}"
                 debug "re-check sudoers file response: ${ssh_sudo_cmd_resp}"
                 value=${ssh_sudo_cmd_resp}
@@ -546,7 +591,7 @@ function check_user() {
 # ARGS: Array of remote server info.
 function create_user() {
 
-    info "Creating user ${USER_INFO[user_name]} on ${USER_INFO[remote_server]}"
+    info "Creating user ${USER_INFO[user_name]} on ${server_array[remote_username]}"
     info "Gathering user credentials to create on remote server"
 
     # This gets server info from array.
@@ -569,24 +614,64 @@ function create_user() {
     # Note the redirection to stderr to stdout.
     # To catch any permissions errors.
     #local ssh_cmd1="grep -o -e '^${USER_INFO[user_name]}\|${USER_INFO[user_id]}\|${USER_INFO[user_home]}' /etc/passwd | uniq"
-    local ssh_create_user_cmd="sudo groupadd -g ${USER_INFO[group_id]} ${USER_INFO[group_name]};
-                sudo useradd -u ${USER_INFO[user_id]} -G ${USER_INFO[group_name]} -s /bin/bash -c '${USER_INFO[msg]}' -m -k /etc/skel/ ${USER_INFO[user_name]};
-                echo ${USER_INFO[user_pass]} | sudo passwd --stdin ${USER_INFO[user_name]};
-                echo '${USER_INFO[user_sudo]}' | sudo tee -a /etc/sudoers"
-    # Future enhanment
-    # local scp_ssh_key_cmd=""
-    local ssh_cmd="${ssh_create_user_cmd}"
-    debug "ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} \'${ssh_cmd}\'"
+
+    if [ "${ADD_USER_WITH_PASSWD}" == "true" ]
+    then
+        info "Creating user with password"
+        local ssh_create_user_cmd="sudo groupadd -g ${USER_INFO[group_id]} ${USER_INFO[group_name]};
+                    sudo useradd -u ${USER_INFO[user_id]} -G ${USER_INFO[group_name]} -s /bin/bash -c '${USER_INFO[msg]}' -m -k /etc/skel/ ${USER_INFO[user_name]};
+                    echo ${USER_INFO[user_pass]} | sudo passwd --stdin ${USER_INFO[user_name]};
+                    echo '${USER_INFO[user_sudo]}' | sudo tee -a /etc/sudoers"
+    else
+        info "Creating user without password"
+        local ssh_create_user_cmd="sudo groupadd -g ${USER_INFO[group_id]} ${USER_INFO[group_name]};
+                    sudo useradd -u ${USER_INFO[user_id]} -G ${USER_INFO[group_name]} -s /bin/bash -c '${USER_INFO[msg]}' -m -k /etc/skel/ ${USER_INFO[user_name]};
+                    echo '${USER_INFO[user_sudo]}' | sudo tee -a /etc/sudoers"
+    fi
+
+    if [ "${add_ssh_pub}" == "true" ]
+    then
+        info "Adding ssh key ${ssh_key_file}"
+        local ssh_key=$(cat ${ssh_pub_key_file})
+        local mk_ssh_dir="sudo mkdir ${USER_INFO[user_home]}/.ssh;
+                    sudo touch ${USER_INFO[user_home]}/.ssh/authorized_keys;
+                    sudo chmod 600 ${USER_INFO[user_home]}/.ssh/authorized_keys;
+                    sudo chown -R ${USER_INFO[user_name]}:${USER_INFO[user_name]} ${USER_INFO[user_home]}/.ssh"
+        local add_ssh_key_cmd="echo -e '# ECM ssh key\n${ssh_key}' | sudo tee -a ${USER_INFO[user_home]}/.ssh/authorized_keys"
+        local ssh_cmd="${ssh_create_user_cmd}; ${mk_ssh_dir}; ${add_ssh_key_cmd}"
+    else
+        local ssh_cmd="${ssh_create_user_cmd}"
+    fi
+
+    #local ssh_cmd="${ssh_create_user_cmd}"
+    # Redacting password.
+    if [ "${server_file_password}" == "true" ]
+    then
+        debug "cat ${TEMP_FILE} | sshpass -p "${IYellow}REDACTED${Color_Off}" ssh -vvv -t ${SSH_OPTS} ${remote_username}@${remote_server}"
+    else
+        debug "ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} \'${ssh_cmd//${USER_INFO[user_pass]}/${IYellow}REDACTED${Color_Off}}\'"
+    fi
     local ssh_cmd_response
+
     # For testing
     #ssh_cmd_response=$(ssh -v -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} "${ssh_cmd}"; echo $?)
-    ssh_cmd_response=$(ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} "${ssh_cmd}")
+
+    # if statement for password auth instead of keys
+    if [ ${server_file_password} == "true" ]
+    then
+        # sshpass -p "EXAMPLE" ssh -o StrictHostKeyChecking=no root@HOST
+        # the ssh_key_file is in the same place was where the password would be
+        ssh_cmd_response=$(sshpass -p "${ssh_id_file}" ssh -t ${SSH_OPTS} ${remote_username}@${remote_server} "${ssh_cmd}")
+    else
+        ssh_cmd_response=$(ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} "${ssh_cmd}")
+    fi
+
     local ssh_cmd_exit="$?"
     debug "ssh exit code:${ssh_cmd_exit}"
     debug "ssh response\n${ssh_cmd_response}"
 
-    echo "${ssh_cmd_response}"
-    return 0
+    #echo "${ssh_cmd_response}"
+   return 0
 }
 
 
@@ -616,8 +701,6 @@ function delete_user() {
     local ssh_delete_user_cmd="sudo groupdel ${USER_INFO[group_name]};
                 sudo userdel -rf ${USER_INFO[user_name]};
                 sudo sed -i '/${USER_INFO[user_sudo]}/d' /etc/sudoers"
-    # Future enhancement
-    # local rm_ssh_key_cmd=""
     local ssh_cmd="${ssh_delete_user_cmd}"
     debug "ssh -t ${SSH_OPTS} -i ${ssh_id_file} ${remote_username}@${remote_server} \'${ssh_cmd}\'"
     local ssh_cmd_response
@@ -641,8 +724,10 @@ function main() {
     CHECK_REMOTE_SERVER="false"
     CHECK_REMOTE_USER="false"
     ADD_USER="false"
+    ADD_USER_WITH_PASSWD="false"
     RM_USER="false"
     DEBUG="false"
+    server_file_password="false"
     TEMP_FILE=/var/tmp/${__base}_$(date +%d%b%Y).tmp
 
     SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no"
@@ -724,7 +809,13 @@ function main() {
     for server_line in $(cat ${server_list_file})
     do
         declare -A line
-        debug "line ${server_line}"
+        # Redacting password from log.
+        if [ ${server_file_password} == "true" ]
+        then
+            debug "line `echo ${server_line} | awk -F, '$3="*********"'`"
+        else
+            debug "line ${server_line}"
+        fi
         line[remote_server]=$(echo "${server_line}" | cut -d ',' -f 1) # Parse Hostname from Input file
         debug "Remote server ${line[remote_server]}"
         info "Processing remote server:: ${line[remote_server]}"
@@ -732,14 +823,26 @@ function main() {
         debug "Remote user ${line[remote_username]}"
         line[ssh_id_file]=$(echo "${server_line}" | cut -d ',' -f 3)  # parse Specific Identity file
         line[ssh_id_file]="${line[ssh_id_file]/#\~/${HOME}}"  # parse Specific Identity file
-        debug "ssh key ${line[ssh_id_file]}"
+        if [ ${server_file_password} == "true" ]
+        then
+            debug "Password is ${IYellow}REDACTED${Color_Off}"
+        else
+            debug "ssh key ${line[ssh_id_file]}"
+        fi
 
         # Are you able to connect get exit code
         info "Checking ssh connection remote server:: ${line[remote_server]}"
-        debug "${line[*]}"
-        debug "ssh command: ssh ${SSH_OPTS} -i ${line[ssh_id_file]} ${line[remote_username]}@${line[remote_server]} 'ls'"
-        line[ssh_test]=$(ssh ${SSH_OPTS} -i ${line[ssh_id_file]} ${line[remote_username]}@${line[remote_server]} "ls" 2>&1 </dev/null)
-        line[ssh_test_exit]="$?"
+        #debug "${line[*]}"
+        if [ ${server_file_password} == "true" ]
+        then
+            debug "ssh command: sshpass -p "${IYellow}REDACTED${Color_Off}" ssh -t -o ConnectTimeout=10 -o StrictHostKeyChecking=no ${line[remote_username]}@${line[remote_server]} 'ls'"
+            line[ssh_test]=$(sshpass -p "${IYellow}REDACTED${Color_Off}" ssh -t -o ConnectTimeout=10 -o StrictHostKeyChecking=no ${line[remote_username]}@${line[remote_server]} "ls" 2>&1 </dev/null)
+            line[ssh_test_exit]="$?"
+        else
+            debug "ssh command: ssh ${SSH_OPTS} -i ${line[ssh_id_file]} ${line[remote_username]}@${line[remote_server]} 'ls'"
+            line[ssh_test]=$(ssh ${SSH_OPTS} -i ${line[ssh_id_file]} ${line[remote_username]}@${line[remote_server]} "ls" 2>&1 </dev/null)
+            line[ssh_test_exit]="$?"
+        fi
         debug "ssh exit code: ${line[ssh_test_exit]}"
         debug "ssh test: ${line[ssh_test]}"
 
